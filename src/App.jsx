@@ -22,16 +22,61 @@ const directionMap = {
   d: { x: 1, y: 0 },
 };
 
+const aiMoves = [
+  { x: 0, y: -1 },
+  { x: 0, y: 1 },
+  { x: -1, y: 0 },
+  { x: 1, y: 0 },
+];
+
 function randomFood(snake) {
   while (true) {
     const candidate = {
       x: Math.floor(Math.random() * GRID_SIZE),
       y: Math.floor(Math.random() * GRID_SIZE),
     };
-    if (!snake.some((segment) => segment.x === candidate.x && segment.y === candidate.y)) {
+    if (!snake.some((s) => s.x === candidate.x && s.y === candidate.y)) {
       return candidate;
     }
   }
+}
+
+function isOppositeDirection(a, b) {
+  return a.x === -b.x && a.y === -b.y;
+}
+
+function getAIMove({ head, food, snakeBody, gridSize, currentDirection }) {
+  const safeMoves = aiMoves.filter((move) => {
+    if (isOppositeDirection(move, currentDirection)) return false;
+
+    const next = {
+      x: head.x + move.x,
+      y: head.y + move.y,
+    };
+
+    const hitWall =
+      next.x < 0 || next.y < 0 || next.x >= gridSize || next.y >= gridSize;
+
+    const hitSelf = snakeBody.some(
+      (s) => s.x === next.x && s.y === next.y
+    );
+
+    return !hitWall && !hitSelf;
+  });
+
+  if (!safeMoves.length) return currentDirection;
+
+  return safeMoves.reduce((best, move) => {
+    const bestDist =
+      Math.abs(head.x + best.x - food.x) +
+      Math.abs(head.y + best.y - food.y);
+
+    const moveDist =
+      Math.abs(head.x + move.x - food.x) +
+      Math.abs(head.y + move.y - food.y);
+
+    return moveDist < bestDist ? move : best;
+  }, safeMoves[0]);
 }
 
 function App() {
@@ -40,11 +85,15 @@ function App() {
   const [queuedDirection, setQueuedDirection] = useState({ x: 1, y: 0 });
   const [food, setFood] = useState(() => randomFood(START_SNAKE));
   const [score, setScore] = useState(0);
-  const [bestScore, setBestScore] = useState(() => Number(localStorage.getItem('snake-best')) || 0);
+  const [bestScore, setBestScore] = useState(
+    () => Number(localStorage.getItem('snake-best')) || 0
+  );
   const [speedMultiplier, setSpeedMultiplier] = useState(1);
   const [status, setStatus] = useState('idle');
+  const [aiEnabled, setAiEnabled] = useState(false);
 
   const tickTimerRef = useRef(null);
+  const directionRef = useRef(direction);
 
   const isRunning = status === 'running';
   const isGameOver = status === 'gameover';
@@ -57,6 +106,7 @@ function App() {
     setFood(randomFood(START_SNAKE));
     setScore(0);
     setStatus('idle');
+    directionRef.current = { x: 1, y: 0 };
   }, []);
 
   const restartGame = useCallback(() => {
@@ -66,22 +116,27 @@ function App() {
     setFood(randomFood(START_SNAKE));
     setScore(0);
     setStatus('running');
+    directionRef.current = { x: 1, y: 0 };
   }, []);
 
   useEffect(() => {
-    const keyHandler = (event) => {
-      const next = directionMap[event.key];
-      if (!next || !isRunning) return;
+    directionRef.current = direction;
+  }, [direction]);
 
-      setQueuedDirection((current) => {
-        const reversing = next.x === -current.x && next.y === -current.y;
-        return reversing ? current : next;
+  useEffect(() => {
+    const keyHandler = (e) => {
+      const next = directionMap[e.key];
+      if (!next || !isRunning || aiEnabled) return;
+
+      setQueuedDirection((curr) => {
+        const reversing = next.x === -curr.x && next.y === -curr.y;
+        return reversing ? curr : next;
       });
     };
 
     window.addEventListener('keydown', keyHandler);
     return () => window.removeEventListener('keydown', keyHandler);
-  }, [isRunning]);
+  }, [isRunning, aiEnabled]);
 
   useEffect(() => {
     if (!isRunning) {
@@ -93,10 +148,22 @@ function App() {
 
     tickTimerRef.current = setInterval(() => {
       setSnake((currentSnake) => {
-        const nextDirection = queuedDirection;
-        setDirection(nextDirection);
-
         const head = currentSnake[0];
+        const currentDirection = directionRef.current;
+
+        const nextDirection = aiEnabled
+          ? getAIMove({
+              head,
+              food,
+              snakeBody: currentSnake.slice(0, -1),
+              gridSize: GRID_SIZE,
+              currentDirection,
+            })
+          : queuedDirection;
+
+        setDirection(nextDirection);
+        directionRef.current = nextDirection;
+
         const nextHead = {
           x: head.x + nextDirection.x,
           y: head.y + nextDirection.y,
@@ -109,7 +176,7 @@ function App() {
           nextHead.y >= GRID_SIZE;
 
         const hitSelf = currentSnake.some(
-          (segment) => segment.x === nextHead.x && segment.y === nextHead.y
+          (s) => s.x === nextHead.x && s.y === nextHead.y
         );
 
         if (hitWall || hitSelf) {
@@ -117,32 +184,32 @@ function App() {
           return currentSnake;
         }
 
-        const updatedSnake = [nextHead, ...currentSnake];
-        const ateFood = nextHead.x === food.x && nextHead.y === food.y;
+        const updated = [nextHead, ...currentSnake];
+        const ate = nextHead.x === food.x && nextHead.y === food.y;
 
-        if (ateFood) {
-          setScore((value) => {
-            const nextScore = value + 10;
+        if (ate) {
+          setScore((val) => {
+            const next = val + 10;
             setBestScore((best) => {
-              if (nextScore > best) {
-                localStorage.setItem('snake-best', String(nextScore));
-                return nextScore;
+              if (next > best) {
+                localStorage.setItem('snake-best', String(next));
+                return next;
               }
               return best;
             });
-            return nextScore;
+            return next;
           });
-          setFood(randomFood(updatedSnake));
-          return updatedSnake;
+          setFood(randomFood(updated));
+          return updated;
         }
 
-        updatedSnake.pop();
-        return updatedSnake;
+        updated.pop();
+        return updated;
       });
     }, delay);
 
     return () => clearInterval(tickTimerRef.current);
-  }, [food, isRunning, queuedDirection, score, speedMultiplier]);
+  }, [aiEnabled, food, isRunning, queuedDirection, score, speedMultiplier]);
 
   useEffect(() => {
     return () => clearInterval(tickTimerRef.current);
@@ -151,15 +218,16 @@ function App() {
   const gameMessage = useMemo(() => {
     if (isGameOver) return `Game Over — Final Score: ${score}`;
     if (isPaused) return 'Paused';
+    if (isRunning && aiEnabled) return 'AI is hunting the prey.';
     if (isRunning) return 'Hunt the glowing prey.';
     return 'Press Start to begin.';
-  }, [isGameOver, isPaused, isRunning, score]);
+  }, [aiEnabled, isGameOver, isPaused, isRunning, score]);
 
   return (
     <main className="app-shell">
       <header className="title-wrap">
         <h1>Snake Reimagined</h1>
-        <p>A modern React snake game with smooth motion and real-time speed control.</p>
+        <p>A modern React snake game with AI auto-play.</p>
       </header>
 
       <ScorePanel
@@ -185,6 +253,10 @@ function App() {
         onRestart={restartGame}
         onReset={resetGame}
       />
+
+      <button onClick={() => setAiEnabled((v) => !v)}>
+        {aiEnabled ? 'AI ON 🤖' : 'AI OFF 🎮'}
+      </button>
     </main>
   );
 }
